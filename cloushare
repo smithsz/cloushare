@@ -1,0 +1,120 @@
+#!/usr/bin/env python
+
+import googl
+import os
+import random
+import re
+import requests
+import time
+import string
+import subprocess
+
+USER = "cloudant_username"
+DB = "cloudant_database"
+PASS = "cloudant_password"
+API_KEY = "google_api_key"
+
+ATT_NAME = "a"
+WATCH_DIR = '/Users/samsmith/Desktop'
+PATTERN = '^Screen Shot [0-9\-]{10} at [0-9\.]{8}.png$'
+
+
+def notify(title, subtitle, message):
+    """
+    Create an OSX notification
+
+    Requires https://github.com/julienXX/terminal-notifier
+    """
+    t = '-title {!r}'.format(title)
+    s = '-subtitle {!r}'.format(subtitle)
+    m = '-message {!r}'.format(message)
+    os.system('terminal-notifier {}'.format(' '.join([m, t, s])))
+
+
+def id_generator(size=8, chars=string.ascii_lowercase + string.digits):
+    """
+    Generate a random character string
+    """
+    return ''.join(random.choice(chars) for _ in range(size))
+
+
+def set_clipboard_data(data):
+    """
+    Place a string on the OS clipboard
+    """
+    p = subprocess.Popen(['pbcopy'], stdin=subprocess.PIPE)
+    p.stdin.write(data)
+    p.stdin.close()
+    return p.wait()
+
+
+def get_minify_url(url):
+    """
+    Shorten a URL using goo.gl
+
+    https://developers.google.com/url-shortener/v1/getting_started
+    """
+    api = googl.Googl(API_KEY)
+    link = api.shorten(url)
+    return link['id']
+
+
+def watch_loop():
+    """
+    Main program loop
+
+    Monitor a directory for changes, uploading any matching files to Cloudant.
+    Place a shortened URL of the uploaded file on the clipboard and notify the
+    user.
+    """
+    before = os.listdir(WATCH_DIR)
+    while True:
+        time.sleep(5)
+        after = os.listdir(WATCH_DIR)
+        added = [f for f in after if not f in before]
+        for f in added:
+            if re.match(PATTERN, f):
+                try:
+                    long_url = upload_file(os.path.join(WATCH_DIR, f))
+                    tiny_url = get_minify_url(long_url)
+                    set_clipboard_data(tiny_url)
+                    notify(
+                        title='ClouShare',
+                        subtitle='Upload Complete',
+                        message=f
+                    )
+                except Exception:
+                    pass  # silently ignore errors
+        before = after # update our view of the dir
+
+
+def upload_file(file_path):
+    """
+    Upload a file to Cloudant
+    """
+    doc_id = id_generator()
+    pic_url = "https://{user}.cloudant.com/{db}/{id}/{att}".format(
+        user=USER,
+        db=DB,
+        id=doc_id,
+        att=ATT_NAME
+    )
+    with open(file_path, 'rb') as data:
+        pic = data.read()
+    r = requests.put(
+        pic_url,
+        data=pic,
+        headers={
+            'Content-Type': 'application/octet-stream'
+        },
+        auth=(USER, PASS)
+    )
+    r.raise_for_status()
+    return pic_url
+
+
+def main():
+    watch_loop()
+
+if __name__ == "__main__":
+    main()
